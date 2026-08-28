@@ -1,0 +1,36 @@
+{
+  "name": "tickwork-repo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Monorepo root for tickwork: React primitives for high-frequency real-time UIs.",
+  "workspaces": [
+    "packages/*",
+    "demo"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace tickwork",
+    "test": "npm run test --workspace tickwork",
+    "test:watch": "npm run test:watch --workspace tickwork",
+    "coverage": "npm run coverage --workspace tickwork",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md,css,yml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md,css,yml}\"",
+    "demo": "npm run dev --workspace tickwork-demo",
+    "demo:build": "npm run build --workspace tickwork-demo",
+    "ci": "npm run typecheck && npm run lint && npm run coverage && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "globals": "^15.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

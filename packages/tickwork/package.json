@@ -1,0 +1,70 @@
+{
+  "name": "tickwork",
+  "version": "0.1.0",
+  "description": "React primitives for high-frequency real-time UIs: rAF-batched keyed store, fine-grained subscriptions, and a resilient WebSocket feed.",
+  "keywords": [
+    "react",
+    "realtime",
+    "websocket",
+    "requestanimationframe",
+    "backpressure",
+    "coalescing",
+    "usesyncexternalstore",
+    "trading",
+    "live-table",
+    "performance"
+  ],
+  "license": "MIT",
+  "author": "Anton Bochkarev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anbochkarev1991/tickwork.git",
+    "directory": "packages/tickwork"
+  },
+  "homepage": "https://github.com/anbochkarev1991/tickwork#readme",
+  "bugs": "https://github.com/anbochkarev1991/tickwork/issues",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitest/coverage-v8": "^2.1.0",
+    "jsdom": "^25.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
