@@ -37,6 +37,10 @@ jobs:
       - name: Build package
         run: npm run build
 
+      - name: Verify documentation claims
+        # Re-measures every number in the READMEs and fails on drift.
+        run: npm run docs:check
+
       - name: Build demo
         run: npm run demo:build
 

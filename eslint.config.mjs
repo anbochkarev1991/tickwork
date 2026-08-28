@@ -38,7 +38,13 @@ export default tseslint.config(
     },
   },
   {
-    files: ['**/*.config.{ts,js,mjs}'],
+    // Config files and repo tooling: plain Node scripts, outside any tsconfig.
+    files: ['**/*.config.{ts,js,mjs}', 'scripts/**/*.mjs'],
     ...tseslint.configs.disableTypeChecked,
+  },
+  {
+    // Repo tooling reports to the terminal; that is its whole job.
+    files: ['scripts/**/*.mjs'],
+    rules: { 'no-console': 'off' },
   },
 );

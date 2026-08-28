@@ -349,6 +349,18 @@ What the tests actually pin down, beyond the happy paths:
 - `<LiveTable>` re-renders **only** the changed row: 5,000 messages across two symbols produce exactly two row renders.
 - The feed connects correctly under `StrictMode`'s mount → unmount → mount cycle. *(This one caught a real bug — see below.)*
 
+### The documentation is tested too
+
+Every number on this page — the test count, each row of the coverage table, both
+bundle sizes — is re-measured by `npm run docs:check` and compared against the
+claim. Overstating coverage fails. Understating the bundle fails. Letting the
+two READMEs disagree about the install command, the size or the licence fails.
+It runs in CI on every push, which is why the tables here are worth reading.
+
+```sh
+npm run docs:check   # 29 claims verified against a fresh measurement
+```
+
 ## Bundle size
 
 | | min+gzip |

@@ -19,10 +19,12 @@
     "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md,css,yml}\"",
     "demo": "npm run dev --workspace tickwork-demo",
     "demo:build": "npm run build --workspace tickwork-demo",
-    "ci": "npm run typecheck && npm run lint && npm run coverage && npm run build"
+    "ci": "npm run typecheck && npm run lint && npm run coverage && npm run build && npm run docs:check",
+    "docs:check": "node scripts/check-docs.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
+    "esbuild": "^0.24.0",
     "eslint": "^9.0.0",
     "eslint-plugin-react-hooks": "^5.0.0",
     "globals": "^15.0.0",
