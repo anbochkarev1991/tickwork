@@ -14,6 +14,17 @@ export interface Tick {
   bid: number;
   ask: number;
   volume: number;
+  /**
+   * Recent prices for the sparkline, oldest first.
+   *
+   * Sampled on a timer rather than per tick, for two reasons: a sparkline needs
+   * a point every few hundred milliseconds, not 200 a second, and a stable
+   * array reference lets the sparkline component memoize away ~99% of its
+   * renders. Under coalescing the store keeps only the newest value per key, so
+   * anything historical has to be carried on the value itself (or kept in a
+   * side buffer) — it cannot be reconstructed from what the store holds.
+   */
+  trend: readonly number[];
   /** Raw messages this symbol has produced. Compare with renders. */
   ticks: number;
   ts: number;
@@ -87,7 +98,25 @@ interface SymbolState extends SymbolSeed {
   current: number;
   volume: number;
   ticks: number;
+  /** Rolling window, mutated in place. */
+  history: number[];
+  /** Frozen copy handed to ticks; a new reference only when a sample lands. */
+  trend: readonly number[];
+  lastSampleAt: number;
 }
+
+/**
+ * Per-tick volatility, as a multiple of the symbol's daily vol. Together with
+ * PULL this fixes the stationary spread at roughly ±vol around the open.
+ */
+const NOISE_SCALE = 0.05;
+/** Strength of the pull back towards the opening price, per tick. */
+const PULL = 0.0002;
+
+/** One sparkline point per this many milliseconds. */
+const TREND_SAMPLE_MS = 250;
+/** Points retained — 24 × 250ms = six seconds of history. */
+const TREND_POINTS = 24;
 
 /**
  * Mutable market state, shared across sockets so a reconnect resumes the same
@@ -98,13 +127,29 @@ export function createMarket(): {
   nextTick: () => Tick;
   snapshot: () => Tick[];
 } {
-  const states: SymbolState[] = SEEDS.map((seed) => ({
-    ...seed,
-    open: seed.price,
-    current: seed.price,
-    volume: Math.round(2_000_000 + Math.random() * 40_000_000),
-    ticks: 0,
-  }));
+  const states: SymbolState[] = SEEDS.map((seed) => {
+    // Seed the window with a backwards random walk so sparklines have shape
+    // from the first frame instead of six seconds of flat line.
+    const history: number[] = [];
+    let walk = seed.price;
+    for (let index = 0; index < TREND_POINTS; index += 1) {
+      walk *= 1 + (Math.random() - 0.5) * seed.vol * 0.5;
+      // Keep the seeded history inside the same band the live walk stays in.
+      walk = Math.min(seed.price * (1 + seed.vol), Math.max(seed.price * (1 - seed.vol), walk));
+      history.unshift(round2(walk));
+    }
+
+    return {
+      ...seed,
+      open: seed.price,
+      current: seed.price,
+      volume: Math.round(2_000_000 + Math.random() * 40_000_000),
+      ticks: 0,
+      history,
+      trend: [...history],
+      lastSampleAt: Date.now(),
+    };
+  });
 
   let cursor = 0;
 
@@ -122,6 +167,7 @@ export function createMarket(): {
       bid: round2(price - spread),
       ask: round2(price + spread),
       volume: state.volume,
+      trend: state.trend,
       ticks: state.ticks,
       ts: Date.now(),
     };
@@ -133,13 +179,32 @@ export function createMarket(): {
     cursor = (cursor + 1 + (Math.random() < 0.25 ? Math.floor(Math.random() * 7) : 0)) % states.length;
     const state = states[cursor] as SymbolState;
 
+    // Mean-reverting walk (Ornstein–Uhlenbeck in discrete form) rather than a
+    // pure random walk. A pure walk drifts without bound: after a few minutes
+    // at 10k messages/sec every symbol was ±30% from its open, which is not a
+    // thing equities do, and it pinned every magnitude bar to full width.
+    //
+    // The pull term keeps prices oscillating around the open. Note that the
+    // *spread* of the result depends only on NOISE_SCALE/PULL, not on how fast
+    // ticks arrive — so the market looks the same at 500/sec and 10,000/sec,
+    // only the timescale changes. Each tick moves the last couple of digits,
+    // leaving the leading digits stable: that is what makes a price readable.
+    const deviation = state.current / state.open - 1;
     // Gaussian-ish step via the sum of two uniforms.
-    const shock = (Math.random() + Math.random() - 1) * state.vol * 0.35;
-    const next = Math.max(0.5, state.current * (1 + shock));
+    const noise = (Math.random() + Math.random() - 1) * state.vol * NOISE_SCALE;
+    const next = Math.max(0.5, state.current * (1 - deviation * PULL + noise));
 
     state.current = round2(next);
     state.volume += Math.round(Math.random() * 900);
     state.ticks += 1;
+
+    const now = Date.now();
+    if (now - state.lastSampleAt >= TREND_SAMPLE_MS) {
+      state.lastSampleAt = now;
+      state.history.push(state.current);
+      if (state.history.length > TREND_POINTS) state.history.shift();
+      state.trend = [...state.history];
+    }
 
     return toTick(state);
   };

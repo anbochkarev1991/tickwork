@@ -17,8 +17,8 @@ export const LIVE_TABLE_STYLES = `
   --tickwork-muted: #8b98a9;
   --tickwork-up: #21c07a;
   --tickwork-down: #ef5350;
-  --tickwork-flash-up: rgba(33, 192, 122, 0.17);
-  --tickwork-flash-down: rgba(239, 83, 80, 0.17);
+  --tickwork-flash-up: rgba(33, 192, 122, 0.14);
+  --tickwork-flash-down: rgba(239, 83, 80, 0.14);
   --tickwork-radius: 10px;
   --tickwork-font: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 

@@ -2,12 +2,16 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   createJsonParser,
   createRealtimeStore,
+  createTimeoutScheduler,
   LiveTable,
+  rafScheduler,
   useRealtimeKeys,
   useWebSocketFeed,
   type FeedStatus,
   type LiveTableColumn,
+  type Scheduler,
 } from 'tickwork';
+import { ChangeCell, Sparkline, SpreadCell } from './cells';
 import {
   rowRenderCounter,
   useFrameStats,
@@ -20,6 +24,22 @@ import { NaiveTable } from './naive-table';
 
 const RATE_PRESETS = [500, 2_000, 5_000, 10_000] as const;
 const DEFAULT_RATE = 2_000;
+
+/**
+ * How often the store is allowed to flush — the render rate, set independently
+ * of the data rate. This is the whole thesis made into a button: at 60fps the
+ * digits are a blur, at 4/s the same feed is readable, and nothing is lost
+ * either way because the store coalesces underneath.
+ */
+const DISPLAY_MODES = [
+  // `flash` is kept well under the flush interval so the highlight reads as a
+  // pulse with a clear off period, rather than sitting permanently lit.
+  { id: 'frame', label: '60/s', note: 'every frame', flashMs: 260 },
+  { id: 'calm', label: '10/s', note: 'every 100ms', flashMs: 70 },
+  { id: 'readable', label: '4/s', note: 'every 250ms', flashMs: 130 },
+] as const;
+
+type DisplayId = (typeof DISPLAY_MODES)[number]['id'];
 
 const parseTick = createJsonParser(isTick);
 
@@ -35,13 +55,21 @@ function signed(value: number, digits = 2): string {
  * memoize its rows.
  */
 const columns: readonly LiveTableColumn<Tick>[] = [
-  { id: 'symbol', header: 'Symbol', width: 88, cell: (t) => <span className="demo-symbol">{t.symbol}</span> },
-  { id: 'name', header: 'Name', cell: (t) => <span className="demo-muted">{t.name}</span> },
+  {
+    id: 'symbol',
+    header: 'Symbol',
+    width: 84,
+    cell: (t) => {
+      // One increment per row render — the instrument behind "row renders/s".
+      rowRenderCounter.count += 1;
+      return <span className="demo-symbol">{t.symbol}</span>;
+    },
+  },
   {
     id: 'price',
     header: 'Last',
     align: 'right',
-    width: 96,
+    width: 92,
     // `flash` drives the green/red pulse by toggling a class on the <td>,
     // without any extra state or renders.
     flash: (t) => t.price,
@@ -52,36 +80,56 @@ const columns: readonly LiveTableColumn<Tick>[] = [
     header: 'Chg',
     align: 'right',
     width: 84,
-    cell: (t) => <span className={t.change >= 0 ? 'demo-up' : 'demo-down'}>{signed(t.change)}</span>,
+    cell: (t) => (
+      <span className={t.change >= 0 ? 'demo-up' : 'demo-down'}>{signed(t.change)}</span>
+    ),
   },
   {
     id: 'changePct',
-    header: 'Chg %',
+    header: 'Change',
+    width: 168,
+    cell: (t) => <ChangeCell value={t.changePct} />,
+  },
+  {
+    id: 'trend',
+    header: 'Trend · 6s',
+    width: 100,
+    cell: (t) => <Sparkline points={t.trend} />,
+  },
+  {
+    id: 'bid',
+    header: 'Bid',
     align: 'right',
     width: 84,
-    cell: (t) => (
-      <span className={t.change >= 0 ? 'demo-up' : 'demo-down'}>{signed(t.changePct)}%</span>
-    ),
+    cell: (t) => <span className="demo-muted">{t.bid.toFixed(2)}</span>,
   },
-  { id: 'bid', header: 'Bid', align: 'right', width: 88, cell: (t) => <span className="demo-muted">{t.bid.toFixed(2)}</span> },
-  { id: 'ask', header: 'Ask', align: 'right', width: 88, cell: (t) => <span className="demo-muted">{t.ask.toFixed(2)}</span> },
+  {
+    id: 'ask',
+    header: 'Ask',
+    align: 'right',
+    width: 84,
+    cell: (t) => <span className="demo-muted">{t.ask.toFixed(2)}</span>,
+  },
+  {
+    id: 'spread',
+    header: 'Spread bps',
+    align: 'right',
+    width: 92,
+    cell: (t) => <SpreadCell bid={t.bid} ask={t.ask} />,
+  },
   {
     id: 'volume',
     header: 'Volume',
     align: 'right',
-    width: 96,
+    width: 88,
     cell: (t) => <span className="demo-muted">{compact.format(t.volume)}</span>,
   },
   {
     id: 'ticks',
     header: 'Ticks',
     align: 'right',
-    width: 88,
-    cell: (t) => {
-      // One increment per row render — the instrument behind "row renders/s".
-      rowRenderCounter.count += 1;
-      return <span className="demo-muted">{plain.format(t.ticks)}</span>;
-    },
+    width: 80,
+    cell: (t) => <span className="demo-muted">{plain.format(t.ticks)}</span>,
   },
 ];
 
@@ -94,6 +142,17 @@ export function App() {
   const [mode, setMode] = useState<Mode>('tickwork');
   const [rate, setRate] = useState<number>(DEFAULT_RATE);
   const [paused, setPaused] = useState(false);
+  const [display, setDisplay] = useState<DisplayId>('frame');
+
+  // Built once; `setScheduler` swaps between them while data keeps arriving.
+  const schedulers = useMemo<Record<DisplayId, Scheduler>>(
+    () => ({
+      frame: rafScheduler,
+      calm: createTimeoutScheduler(100),
+      readable: createTimeoutScheduler(250),
+    }),
+    [],
+  );
 
   const modeRef = useRef<Mode>(mode);
   modeRef.current = mode;
@@ -125,6 +184,7 @@ export function App() {
   const coalescedRate = useRatePerSecond(useCallback(() => store.getMetrics().coalesced, [store]));
   const renderRate = useRatePerSecond(useCallback(() => rowRenderCounter.count, []));
   const backlog = usePolledValue(useCallback(() => mockFeed.getQueueDepth(), [mockFeed]));
+  const flushRate = useRatePerSecond(useCallback(() => store.getMetrics().flushes, [store]));
 
   const registerNaiveSink = useCallback((sink: ((tick: Tick) => void) | null) => {
     naiveSink.current = sink;
@@ -133,6 +193,14 @@ export function App() {
   const handleRate = (next: number): void => {
     setRate(next);
     mockFeed.setRate(next);
+  };
+
+  const flashMs =
+    DISPLAY_MODES.find((option) => option.id === display)?.flashMs ?? 260;
+
+  const handleDisplay = (id: DisplayId): void => {
+    setDisplay(id);
+    store.setScheduler(schedulers[id]);
   };
 
   const handlePause = (): void => {
@@ -187,6 +255,12 @@ export function App() {
           note={`${SYMBOL_COUNT} rows on screen`}
         />
         <Stat
+          label="Flushes"
+          value={mode === 'tickwork' ? `${plain.format(flushRate)}/s` : 'n/a'}
+          note={mode === 'tickwork' ? 'renders per second' : 'no batching at all'}
+          tone={mode === 'tickwork' ? undefined : 'bad'}
+        />
+        <Stat
           label="Backlog"
           value={compact.format(backlog)}
           note="messages not yet delivered"
@@ -223,6 +297,28 @@ export function App() {
           >
             naive setState
           </button>
+        </div>
+
+        <div className="demo-control-group" role="group" aria-label="Display rate">
+          <span className="demo-control-label" title="How often the store flushes to the DOM">
+            Display
+          </span>
+          {DISPLAY_MODES.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              className={display === option.id ? 'demo-btn is-active' : 'demo-btn'}
+              onClick={() => handleDisplay(option.id)}
+              disabled={mode === 'naive'}
+              title={
+                mode === 'naive'
+                  ? 'Not available: naive setState renders on every message, so there is no render rate to set'
+                  : option.note
+              }
+            >
+              {option.label}
+            </button>
+          ))}
         </div>
 
         <div className="demo-control-group" role="group" aria-label="Feed rate">
@@ -272,7 +368,7 @@ export function App() {
             columns={columns}
             keys={sortedKeys}
             maxHeight="min(60vh, 640px)"
-            flashDurationMs={260}
+            flashDurationMs={flashMs}
             aria-label="Live market data"
           />
         ) : (

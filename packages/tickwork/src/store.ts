@@ -25,7 +25,10 @@ const EMPTY_KEYS: readonly string[] = Object.freeze([]);
  *    removed.
  */
 export function createRealtimeStore<T>(options: CreateRealtimeStoreOptions<T>): RealtimeStore<T> {
-  const { getKey, merge, areEqual, scheduler = rafScheduler, initialItems } = options;
+  const { getKey, merge, areEqual, initialItems } = options;
+
+  /** Mutable: `setScheduler` swaps the flush cadence while data keeps arriving. */
+  let scheduler = options.scheduler ?? rafScheduler;
 
   /** What subscribers can currently see. */
   const committed = new Map<string, T>();
@@ -207,6 +210,17 @@ export function createRealtimeStore<T>(options: CreateRealtimeStoreOptions<T>): 
       cancelFlush?.();
       cancelFlush = null;
       flush();
+    },
+
+    setScheduler(next) {
+      if (next === scheduler) return;
+      // Move any queued flush onto the new cadence rather than dropping it, so
+      // changing the display rate never loses an update that was already due.
+      const wasScheduled = cancelFlush !== null;
+      cancelFlush?.();
+      cancelFlush = null;
+      scheduler = next;
+      if (wasScheduled) scheduleFlush();
     },
 
     getMetrics(): RealtimeStoreMetrics {

@@ -12,9 +12,9 @@ Your feed pushes thousands of updates a second. Your UI renders once a frame, an
 [![types](https://img.shields.io/badge/TypeScript-strict-3178c6)](https://github.com/anbochkarev1991/tickwork/blob/main/tsconfig.base.json)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-![tickwork demo: 10,000 updates per second across 50 symbols, then the same feed with naive setState](docs/demo.gif)
+![tickwork demo: 10,000 updates per second across 50 symbols, shown at frame rate and at a calm 4 flushes per second, then the same feed with naive setState](docs/demo.gif)
 
-*50 symbols · 10,000 messages/sec · the toggle switches the same feed between `tickwork` and a naive `setState` per message.*
+*50 symbols · up to 10,000 messages/sec. The **Display** control sets the render rate independently of the data rate; the **Mode** toggle switches the same feed to a naive `setState` per message.*
 
 **[Live demo](https://anbochkarev1991.github.io/tickwork/)** · **[Why](#the-problem)** · **[Quick start](#quick-start)** · **[How it works](#how-it-works)** · **[API](#api)**
 
@@ -58,21 +58,26 @@ useWebSocketFeed({ url, parse: createJsonParser(isTick), onItem: store.ingest })
 
 Same mock feed, same 50-row table, same machine — the demo in this repo, toggled between modes:
 
-| At 10,000 messages/sec | naive `setState` | `tickwork` |
-| --- | --- | --- |
-| Messages actually ingested | **887/sec** — the feed backs up | **10,000/sec** |
-| Row renders | **44,300/sec** | **3,200/sec** |
-| Undelivered backlog after 5s | **25,000 messages** (capped; still growing) | **0** |
-| Frame rate | 120 fps | 120 fps |
+| At 10,000 messages/sec across 50 symbols | naive `setState` | `tickwork` @ 60/s | `tickwork` @ 4/s |
+| --- | --- | --- | --- |
+| Messages actually ingested | **2,400/sec** — the feed backs up | **10,000/sec** | **9,900/sec** |
+| Row renders | **121,500/sec** | **3,100/sec** | **200/sec** |
+| Updates coalesced away | 0 | 6,900/sec | 9,600/sec |
+| Flushes (renders) per second | one per message | 64 | 4 |
+| Undelivered backlog after 5s | **25,000 messages** (capped; still growing) | 159 | **0** |
+| Frame rate | 120 fps | 120 fps | 120 fps |
+
+The right-hand column is the interesting one. Same feed, same data, **600× less rendering work than the naive version** — and it is the only one of the three a human can actually read.
 
 <table>
 <tr>
-<td width="50%"><img src="docs/tickwork-10k.png" alt="tickwork at 10K messages per second: 3.2K row renders, zero backlog"><br><em><code>tickwork</code>: 10K/s in, 3.2K row renders, no backlog.</em></td>
-<td width="50%"><img src="docs/naive-10k.png" alt="naive setState at 10K messages per second: 44.3K row renders, 25K backlog"><br><em>Naive: 14× the render work, 25K messages behind.</em></td>
+<td width="33%"><img src="docs/tickwork-10k.png" alt="tickwork at 10K messages per second, flushing every frame"><br><em><code>tickwork</code> @ 60/s — 10K/s in, 3.1K row renders, no backlog.</em></td>
+<td width="33%"><img src="docs/calm-10k.png" alt="the same feed flushed four times a second, legible"><br><em><code>tickwork</code> @ 4/s — same feed, 200 row renders, and readable.</em></td>
+<td width="33%"><img src="docs/naive-10k.png" alt="naive setState at 10K messages per second, 121500 row renders and a 25000 message backlog"><br><em>Naive — 121.5K row renders, 25K messages behind.</em></td>
 </tr>
 </table>
 
-**Read that table honestly.** On a fast machine the naive version does *not* drop frames — it saturates the main thread and falls behind instead. It burns 14× the rendering work to display data that is *seconds stale*, and drops messages it never manages to deliver. That is the real failure mode of a busy dashboard, and it is worse than jank because it is invisible: the UI looks fine while the numbers are wrong. On slower hardware, or with heavier rows, the same saturation becomes visible jank as well.
+**Read that table honestly.** On a fast machine the naive version does *not* drop frames — it saturates the main thread and falls behind instead. It burns hundreds of times the rendering work to display data that is *seconds stale*, and drops messages it never manages to deliver. That is the real failure mode of a busy dashboard, and it is worse than jank because it is invisible: the UI looks fine while the numbers are wrong. On slower hardware, or with heavier rows, the same saturation becomes visible jank as well.
 
 <sub>Measured in headless Chromium (Playwright) on an Apple-silicon Mac, production build, `PerformanceObserver` long-task probe, averaged over 5s windows. Reproduce it: `npm run demo` and click the toggles.</sub>
 
@@ -185,7 +190,7 @@ Four ideas, each doing one job.
 - **Paint alignment.** State commits right before the browser paints, so React never renders a frame that will not be shown.
 - **Background tabs cost nothing.** Browsers stop serving rAF in hidden tabs, so rendering stops completely while updates keep coalescing in memory. One flush catches up when the tab is visible again.
 
-Want a different cadence? `scheduler` is injectable — `createTimeoutScheduler(250)` for a calm 4Hz sidebar, `createManualScheduler()` to drive flushes by hand in tests.
+Want a different cadence? `scheduler` is injectable, and `store.setScheduler()` swaps it at runtime while data keeps arriving — `createTimeoutScheduler(250)` for a calm 4Hz view, `createManualScheduler()` to drive flushes by hand in tests. See [making fast data readable](#making-fast-data-readable), because this turns out to be a design tool and not just a performance one.
 
 ### 2. Coalesce — latest value per key wins
 
@@ -224,6 +229,40 @@ Two details make this correct rather than merely fast:
 
 ---
 
+## Making fast data readable
+
+Keeping up with a fast feed is a means, not an end. Once the render rate is no longer chained to the data rate, the honest question is: **what rate should a human actually look at?**
+
+At 60 flushes a second, a price is not a number, it is a texture. Sampling one cell in the demo 40 times over two seconds, the text changed **39 times out of 40** at frame rate, and **8 times out of 40** at four flushes a second. The second one you can read. The first one you can only watch.
+
+So the same control that makes tickwork fast also makes it legible:
+
+```ts
+// The feed keeps arriving at 10,000/sec. Only the rendering slows down.
+store.setScheduler(calm ? createTimeoutScheduler(250) : rafScheduler);
+```
+
+Nothing is lost by doing this. The store still ingests every message and still coalesces to the newest value per key — you simply stop painting values no one had time to read. At 10,000/sec that is 9,600 updates a second superseded before paint, 200 row renders instead of 3,100, and a table you can look at.
+
+Frequency is only half of it, though. Real trading screens have never relied on digits alone, and the reasons are worth copying:
+
+| Technique | Why it works |
+| --- | --- |
+| **Price ladders / DOM** | Price becomes a fixed axis and the *number stops moving*; position carries the meaning. The standard futures-trading UI. |
+| **Sparklines** | Trend at a glance. Traders read the shape continuously and the digits only at the moment of execution. |
+| **Magnitude bars** | Length is pre-attentive — comparable across rows without reading anything. |
+| **Direction arrows** | Redundant encoding. Colour alone fails for the ~8% of men with red–green colour blindness. |
+| **Deliberate display throttling** | Many order-entry screens cap the display at 100–250ms regardless of feed rate, for exactly the reason above. |
+
+The demo implements the middle three in about 120 lines of inline SVG and CSS ([`demo/src/cells.tsx`](demo/src/cells.tsx)) — deliberately in the demo and not in the package, because tickwork is not a charting library and a sparkline does not belong in your bundle. Two details there are worth stealing:
+
+- **The sparkline series is sampled, not per-tick.** A sparkline needs a point every few hundred milliseconds, not two hundred a second. Sampling gives a *stable array reference*, so the sparkline subtree memoizes away ~99% of its renders while the row around it updates 40 times a second. And because a coalescing store holds only the newest value per key, anything historical has to be carried on the value or kept in a side buffer — it cannot be recovered from the store.
+- **The magnitude bar uses a fixed scale, not the largest value on screen.** Normalising against visible rows would mean a row had to know its neighbours, which would re-render every row on every tick — precisely what the library exists to prevent. Fine-grained rendering has design consequences, and this is one of them.
+
+`<LiveTable>` also honours `prefers-reduced-motion` by dropping the flash entirely, and the flash duration should always sit well under the flush interval so it reads as a pulse rather than a permanently lit cell.
+
+---
+
 ## API
 
 ### `createRealtimeStore<T>(options)`
@@ -257,6 +296,7 @@ const store = createRealtimeStore<Tick>({
 | `getAll()` | Every committed value, as a fresh array. |
 | `remove(key)` / `clear()` | Synchronous, and notify immediately. |
 | `flushNow()` | Apply queued updates now instead of waiting for the scheduler. |
+| `setScheduler(scheduler)` | Change the flush cadence at runtime. A queued flush is re-armed on the new scheduler, so switching never drops an update. |
 | `getMetrics()` | `{ ingested, coalesced, applied, flushes, size, pending }`. |
 | `resetMetrics()` | Zero the throughput counters. |
 | `dispose()` | Cancel pending work, drop listeners, stop scheduling. |
@@ -321,10 +361,10 @@ A column is `{ id, header?, cell, align?, width?, className?, flash? }`. `flash`
 
 ## Testing
 
-113 tests, no flakes, no timing luck: fake timers, a mock `WebSocket`, and a hand-rolled `requestAnimationFrame` mock so every test states exactly how many frames elapsed.
+119 tests, no flakes, no timing luck: fake timers, a mock `WebSocket`, and a hand-rolled `requestAnimationFrame` mock so every test states exactly how many frames elapsed.
 
 ```sh
-npm test          # 113 tests
+npm test          # 119 tests
 npm run coverage  # thresholds enforced at 90%
 ```
 
@@ -348,6 +388,8 @@ What the tests actually pin down, beyond the happy paths:
 - Unmount closes the socket, detaches every listener, and cancels a pending reconnect timer.
 - `<LiveTable>` re-renders **only** the changed row: 5,000 messages across two symbols produce exactly two row renders.
 - The feed connects correctly under `StrictMode`'s mount → unmount → mount cycle. *(This one caught a real bug — see below.)*
+- `setScheduler` moves a *queued* flush onto the new cadence rather than dropping it, routes later ingests through the new scheduler, treats a repeat call as a no-op, and cannot resurrect a disposed store.
+- The same 60 messages produce 6 notifications at frame rate and 1 at a calm cadence, with an identical final value — coalescing, asserted as a readability property rather than just a throughput one.
 
 ### The documentation is tested too
 

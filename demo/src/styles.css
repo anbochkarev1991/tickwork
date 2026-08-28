@@ -36,7 +36,7 @@ code {
 }
 
 .demo-page {
-  max-width: 1240px;
+  max-width: 1440px;
   margin: 0 auto;
   padding: 28px 20px 56px;
   display: flex;
@@ -97,7 +97,7 @@ code {
 
 .demo-stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
   gap: 10px;
 }
 
@@ -304,4 +304,64 @@ code {
   .demo-status {
     margin-left: 0;
   }
+}
+
+/* --- non-numeric encodings ------------------------------------------------ */
+
+.demo-sparkline {
+  display: block;
+  overflow: visible;
+}
+
+.demo-change {
+  display: inline-grid;
+  grid-template-columns: 12px 66px 1fr;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+.demo-arrow {
+  font-size: 9px;
+  line-height: 1;
+  opacity: 0.9;
+}
+
+.demo-change-value {
+  text-align: right;
+}
+
+.demo-bar-track {
+  height: 6px;
+  min-width: 24px;
+  border-radius: 3px;
+  background: rgba(139, 152, 169, 0.16);
+  overflow: hidden;
+}
+
+.demo-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  /* Deliberately not animated: at 40 updates/sec a transition would smear
+     rather than inform. */
+}
+
+.demo-bar-fill.is-up {
+  background: var(--up);
+}
+
+.demo-bar-fill.is-down {
+  background: var(--down);
+}
+
+.demo-spread {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.demo-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }

@@ -476,6 +476,113 @@ describe('createRealtimeStore — removal and lifecycle', () => {
   });
 });
 
+describe('createRealtimeStore — swapping the scheduler', () => {
+  it('moves a queued flush onto the new scheduler instead of dropping it', () => {
+    const fast = createManualScheduler();
+    const calm = createManualScheduler();
+    const store = createRealtimeStore<Quote>({ getKey: (item) => item.symbol, scheduler: fast });
+    const listener = vi.fn();
+    store.subscribe('AAPL', listener);
+
+    store.ingest(quote('AAPL', 1));
+    expect(fast.pending).toBe(1);
+
+    store.setScheduler(calm);
+
+    // The old scheduler is disarmed, the new one is armed, the update survives.
+    expect(fast.pending).toBe(0);
+    expect(calm.pending).toBe(1);
+    expect(store.getSnapshot('AAPL')).toBeUndefined();
+
+    calm.flush();
+    expect(store.getSnapshot('AAPL')).toEqual(quote('AAPL', 1));
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not arm the new scheduler when nothing is queued', () => {
+    const fast = createManualScheduler();
+    const calm = createManualScheduler();
+    const store = createRealtimeStore<Quote>({ getKey: (item) => item.symbol, scheduler: fast });
+
+    store.setScheduler(calm);
+
+    expect(calm.pending).toBe(0);
+    expect(fast.pending).toBe(0);
+  });
+
+  it('routes later ingests through the new scheduler', () => {
+    const fast = createManualScheduler();
+    const calm = createManualScheduler();
+    const store = createRealtimeStore<Quote>({ getKey: (item) => item.symbol, scheduler: fast });
+
+    store.setScheduler(calm);
+    store.ingest(quote('AAPL', 1));
+
+    expect(fast.pending).toBe(0);
+    expect(calm.pending).toBe(1);
+
+    // The old scheduler firing must not apply anything.
+    fast.flush();
+    expect(store.getSnapshot('AAPL')).toBeUndefined();
+
+    calm.flush();
+    expect(store.getSnapshot('AAPL')).toEqual(quote('AAPL', 1));
+  });
+
+  it('setting the same scheduler is a no-op', () => {
+    const scheduler = createManualScheduler();
+    const store = createRealtimeStore<Quote>({ getKey: (item) => item.symbol, scheduler });
+
+    store.ingest(quote('AAPL', 1));
+    store.setScheduler(scheduler);
+
+    // Still exactly one queued flush, not re-armed into two.
+    expect(scheduler.pending).toBe(1);
+    expect(scheduler.flush()).toBe(1);
+    expect(store.getMetrics().flushes).toBe(1);
+  });
+
+  it('coalesces harder at a slower cadence without losing the latest value', () => {
+    const scheduler = createManualScheduler();
+    const store = createRealtimeStore<Quote>({ getKey: (item) => item.symbol, scheduler });
+    const listener = vi.fn();
+    store.subscribe('AAPL', listener);
+
+    // A "60fps" stretch: one flush per 10 messages.
+    for (let batch = 0; batch < 6; batch += 1) {
+      for (let index = 0; index < 10; index += 1) store.ingest(quote('AAPL', batch * 10 + index));
+      scheduler.flush();
+    }
+    expect(listener).toHaveBeenCalledTimes(6);
+    expect(store.getSnapshot('AAPL')).toEqual(quote('AAPL', 59));
+
+    listener.mockClear();
+    store.resetMetrics();
+
+    // The same 60 messages at a calmer cadence: one notification, same value.
+    const calm = createManualScheduler();
+    store.setScheduler(calm);
+    for (let index = 60; index < 120; index += 1) store.ingest(quote('AAPL', index));
+    calm.flush();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(store.getSnapshot('AAPL')).toEqual(quote('AAPL', 119));
+    expect(store.getMetrics().coalesced).toBe(59);
+  });
+
+  it('does not resurrect a disposed store', () => {
+    const fast = createManualScheduler();
+    const calm = createManualScheduler();
+    const store = createRealtimeStore<Quote>({ getKey: (item) => item.symbol, scheduler: fast });
+
+    store.ingest(quote('AAPL', 1));
+    store.dispose();
+    store.setScheduler(calm);
+
+    expect(calm.pending).toBe(0);
+  });
+});
+
 describe('createRealtimeStore — default rAF scheduler', () => {
   it('flushes once per frame regardless of how many messages arrived', () => {
     raf = installRafMock();

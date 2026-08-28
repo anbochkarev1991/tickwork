@@ -101,6 +101,22 @@ export interface RealtimeStore<T> {
    */
   flushNow: () => void;
 
+  /**
+   * Swap the flush cadence while the feed keeps running.
+   *
+   * The point of decoupling the data rate from the render rate is not only to
+   * keep up — it is that you get to *choose* the render rate. Numbers changing
+   * 60 times a second are unreadable; the same feed flushed 4 times a second is
+   * calm, and no data is lost because the store still coalesces underneath.
+   *
+   * ```ts
+   * store.setScheduler(calm ? createTimeoutScheduler(250) : rafScheduler);
+   * ```
+   *
+   * A flush that was already queued is re-armed on the new scheduler.
+   */
+  setScheduler: (scheduler: Scheduler) => void;
+
   /** Counters describing throughput and how much coalescing is happening. */
   getMetrics: () => RealtimeStoreMetrics;
 
